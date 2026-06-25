@@ -1,37 +1,20 @@
-# 🗺️ LSS Karte
+# LSS Scripts
 
-Dieses Skript basiert auf dem großartigen Projekt: [DispoPlus von jxn-30](https://github.com/jxn-30/DispoPlus).
+Einige nützliche Skripte für das Leitstellenspiel.
 
-**Aktuelle Version:** `3.0.0`
+## Installation
 
----
+1. Stelle sicher, dass du einen Userscript-Manager wie Tampermonkey oder Greasemonkey installiert hast.
+2. Installiere die Skripte, indem du auf den Link klickst und "Install" wählst.
 
-## 📸 Screenshots
+## Skripte
 
-### 🖥️ Interface-Optionen
-Hier siehst du die verschiedenen Ebenen, die du im Interface auswählen kannst:
+### Dashboard
+Ein verbessertes Dashboard mit Dark-Command-Theme und zusätzlichen Funktionen.
 
-| Bundesländer | Landkreise | Städte & Gemeinden |
-| :---: | :---: | :---: |
-| <img src="images/bundesländer-interface.png" alt="Bundesländer" width="250"> | <img src="images/landkreise-interface.png" alt="Landkreise" width="250"> | <img src="images/städte-interface.png" alt="Städte & Gemeinden" width="250"> |
+Readme: [dashboard/README.md](dashboard/README.md)
 
-### 🗺️ Beispiele in der Praxis
-So sieht die Karte aus, wenn die verschiedenen Filter und Grenzen aktiv sind:
+### Karte
+Eine Karte die Landkreise, Bundesländer und Städte anzeigt. Diese basiert auf [DispoPlus von jxn-30](https://github.com/jxn-30/DispoPlus).
 
-| Detailansicht Sachsen | Bundesland-Fokus | Deutschland-Übersicht |
-| :---: | :---: | :---: |
-| <img src="images/sachsen-with-all.png" alt="Sachsen mit Landkreisen und Städten" width="250"> <br><sub>*Sachsen komplett (Landkreise & Städte)*</sub> | <img src="images/sachsen-with-landkreise.png" alt="Sachsen mit Landkreisen" width="250"> <br><sub>*Sachsen mit Landkreisen*</sub> | <img src="images/deutschland.png" alt="Deutschland mit Bundesländern" width="250"> <br><sub>*Deutschland-Gesamtansicht*</sub> |
-
-*(Hinweis: Für die reine Bundesland-Ansicht von Sachsen gibt es auch die Datei `images/sachsen.png`)*
-
----
-
-## ✨ Features
-* **Drei Zoom-Ebenen:** Nahtloser Wechsel zwischen Bundesländern, Landkreisen und einzelnen Städten/Gemeinden.
-* **Perfekt für LSS:** Optimiert für die Leitstellenspiel-Logistik, um Wachen und Einsätze besser zu koordinieren.
-* **Klares Design:** Grenzen werden sauber und performant auf der Karte gezeichnet.
-
-## 🛠️ Installation & Nutzung
-1. Stelle sicher, dass du einen Userscript-Manager (wie Tampermonkey) installiert hast.
-2. Installiere das Skript.
-3. Lade die Karte im Spiel neu und nutze das neue Interface am rechten Bildschirmrand.
+Readme: [karte/README.md](karte/README.md)

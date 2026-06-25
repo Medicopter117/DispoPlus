@@ -17,9 +17,9 @@
     const COLOR_KEYS = { 1: 'LSS_COLOR_1', 2: 'LSS_COLOR_2', 3: 'LSS_COLOR_3' };
     const BASE_URL = "https://raw.githubusercontent.com/Medicopter117/LSS-Karte/refs/heads/master/";
     const SOURCES = {
-        1: { de: "deutschland/bundeslander.json", at: "osterreich/bundeslander.json" },
-        2: { de: "deutschland/regierungbezirke.json", at: "osterreich/regierungbezirke.json" },
-        3: { de: "deutschland/stadte.json", at: "osterreich/stadte.json" }
+        1: { de: "karte/deutschland/bundeslander.json", at: "karte/osterreich/bundeslander.json" },
+        2: { de: "karte/deutschland/regierungbezirke.json", at: "karte/osterreich/regierungbezirke.json" },
+        3: { de: "karte/deutschland/stadte.json", at: "karte/osterreich/stadte.json" }
     };
 
     $('head').append($('<link rel="stylesheet" type="text/css" />').attr('href', 'https://cdn.rawgit.com/patosai/tree-multiselect/v2.4.1/dist/jquery.tree-multiselect.min.css'));
@@ -68,7 +68,7 @@
         let selectMarkup = `<select id="kreise-selection-lvl-${level}" multiple="multiple">`;
 
         function fetchAndAppend(url, countryName) {
-            return $.getJSON(BASE_URL + url).then(function(data) {
+            return $.getJSON(BASE_URL + url).then(function (data) {
                 data.features.forEach(f => {
                     let p = f.properties || {};
                     let name = p.NAME_4 || p.NAME_3 || p.NAME_2 || p.NAME_1 || p.name || "Ohne Name";
@@ -78,7 +78,7 @@
                 });
             });
         }
-        $.when(fetchAndAppend(SOURCES[level].de, "Deutschland"), fetchAndAppend(SOURCES[level].at, "Österreich")).done(function() {
+        $.when(fetchAndAppend(SOURCES[level].de, "Deutschland"), fetchAndAppend(SOURCES[level].at, "Österreich")).done(function () {
             selectMarkup += `</select>`;
             panel.html(selectMarkup);
             $.getScript("https://cdn.rawgit.com/patosai/tree-multiselect/v2.4.1/dist/jquery.tree-multiselect.min.js", function () {
@@ -106,7 +106,7 @@
 
     $(document).on('click', '#kreise-openBtn', (e) => { e.preventDefault(); $('#kreise-modal').show(); loadTabLevel(1); });
     $('.kreise-close').click(() => $('#kreise-modal').hide());
-    $('.lss-tab-nav li').click(function() {
+    $('.lss-tab-nav li').click(function () {
         $('.lss-tab-nav li').removeClass('active'); $(this).addClass('active');
         $('.tab-content-panel').removeClass('active');
         let tab = $(this).data('tab');
@@ -114,7 +114,7 @@
         loadTabLevel(tab);
     });
 
-    $('#kreise-btn-save').click(function() {
+    $('#kreise-btn-save').click(function () {
         $(this).text('Bitte warten. lädt...');
         for (let l = 1; l <= 3; l++) {
             localStorage.setItem(COLOR_KEYS[l], $('#color-' + l).val());
