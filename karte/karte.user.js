@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LSS Karte
 // @namespace    http://tampermonkey.net/
-// @version      4.2.0
+// @version      4.3.0
 // @description  Karte mit Bundesländer, Regierungsbezirke und Gemeinden für DE und AT -- Mit Einstellung.
 // @author       Jalibu, LennyPegauOfficial & AI
 // @match        https://www.leitstellenspiel.de/
@@ -14,10 +14,12 @@
 (function () {
     'use strict';
 
-    const STORAGE_PREFIX  = 'LSS_KREIS_LVL_';
-    const STYLE_KEY        = 'LSS_KREIS_STYLES';           // one consolidated object instead of 3 loose keys
+    const STORAGE_PREFIX = 'LSS_KREIS_LVL_';
+    const STYLE_KEY = 'LSS_KREIS_STYLES';
+    const VISIBLE_PREFIX = 'LSS_KREIS_VISIBLE_';
     const LEGACY_COLOR_KEYS = { 1: 'LSS_COLOR_1', 2: 'LSS_COLOR_2', 3: 'LSS_COLOR_3' };
-    const BASE_URL = "https://raw.githubusercontent.com/Medicopter117/LSS-Karte/refs/heads/master/";
+    // jsDelivr instead of raw.githubusercontent: CDN-cached, no aggressive rate limiting
+    const BASE_URL = "https://cdn.jsdelivr.net/gh/Medicopter117/LSS-Karte@master/";
     const SOURCES = {
         1: { de: "karte/deutschland/bundeslander.json",     at: "karte/osterreich/bundeslander.json" },
         2: { de: "karte/deutschland/regierungbezirke.json", at: "karte/osterreich/regierungbezirke.json" },
@@ -43,13 +45,25 @@
             }
             if (hadLegacy) localStorage.setItem(STYLE_KEY, JSON.stringify(stored));
         }
-        // guard against partially-saved / outdated shape
         for (let l = 1; l <= 3; l++) stored[l] = Object.assign({}, DEFAULT_STYLES[l], stored[l]);
         return stored;
     }
     let styles = loadStyles();
 
-    // ---------- geoJSON request cache (fetched once, reused by the picker AND the map) ----------
+    function isVisible(level) {
+        let v = localStorage.getItem(VISIBLE_PREFIX + level);
+        return v === null ? true : v === 'true';
+    }
+    function setVisible(level, visible) {
+        localStorage.setItem(VISIBLE_PREFIX + level, visible);
+        let group = drawnLayers[level];
+        if (!group || typeof map === 'undefined') return;
+        if (visible) { if (!map.hasLayer(group)) group.addTo(map); }
+        else { if (map.hasLayer(group)) map.removeLayer(group); }
+        updateLegend();
+    }
+
+    // ---------- geoJSON request cache (fetched once, reused by picker AND map) ----------
     const geoCache = {};
     function fetchGeoJson(level, country) {
         const key = level + '_' + country;
@@ -58,6 +72,9 @@
     }
     function featureId(p, fallback) {
         return String(p.GID_4 || p.GID_3 || p.GID_2 || p.GID_1 || fallback);
+    }
+    function featureName(p) {
+        return p.NAME_4 || p.NAME_3 || p.NAME_2 || p.NAME_1 || p.name || "Gebiet";
     }
 
     // ---------- styling ----------
@@ -70,6 +87,10 @@
             #kreise-modal { width:70%; max-width:900px; height:80vh; position:fixed; top:10%; left:15%; background:#fff; z-index:99999;
                 border-radius:10px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 12px 40px rgba(0,0,0,.35);
                 font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+
+            @media (max-width: 768px) {
+                #kreise-modal { width:94%; left:3%; top:5%; height:90vh; }
+            }
 
             #kreise-modal .kreise-header { background:linear-gradient(135deg,#3a0ca3,#4361ee); color:#fff; padding:14px 18px;
                 display:flex; align-items:center; justify-content:space-between; font-weight:600; font-size:15px; }
@@ -90,13 +111,19 @@
             .tab-content-panel.active { display:block; }
             .tab-hint { margin:0 0 12px; font-size:12px; color:#888; }
 
+            .select-actions { display:flex; gap:10px; margin-bottom:12px; }
+            .select-actions button { font-size:12px; font-weight:600; color:#3a0ca3; background:#f0edfb; border:1px solid #ddd6f7;
+                border-radius:5px; padding:6px 12px; cursor:pointer; transition:background-color .15s ease; }
+            .select-actions button:hover { background:#e2dcfa; }
+
             .style-card { display:flex; align-items:center; gap:16px; margin-bottom:14px; padding:14px 16px;
-                background:#f9f9fb; border:1px solid #ececf1; border-radius:8px; }
+                background:#f9f9fb; border:1px solid #ececf1; border-radius:8px; flex-wrap:wrap; }
             .style-card .swatch { width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px #ddd; flex-shrink:0; }
-            .style-card .style-label { font-weight:600; font-size:13px; min-width:120px; color:#222; }
+            .style-card .style-label { font-weight:600; font-size:13px; min-width:100px; color:#222; }
             .style-card input[type=color] { width:36px; height:28px; border:none; border-radius:4px; padding:0; cursor:pointer; background:none; }
             .style-card .slider-group { display:flex; align-items:center; gap:6px; font-size:11px; color:#777; }
             .style-card .slider-group input[type=range] { width:80px; }
+            .style-card .visible-toggle { display:flex; align-items:center; gap:5px; font-size:11px; color:#555; }
             .style-card .reset-btn { margin-left:auto; font-size:11px; color:#3a0ca3; background:none; border:none; cursor:pointer; text-decoration:underline; }
             .style-card .reset-btn:hover { color:#4361ee; }
 
@@ -105,6 +132,11 @@
                 font-size:13px; cursor:pointer; transition:background-color .15s ease; }
             #kreise-btn-save:hover { background:#4361ee; }
             #kreise-btn-save:disabled { opacity:.6; cursor:default; }
+
+            .lss-legend { background:#fff; padding:8px 12px; border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,.25);
+                font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; font-size:12px; color:#333; }
+            .lss-legend-row { display:flex; align-items:center; gap:6px; padding:2px 0; }
+            .lss-legend-swatch { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
         </style>
     `);
 
@@ -134,7 +166,7 @@
 
     // ---------- Farben-Tab ----------
     function renderColorPanel() {
-        let html = `<p class="tab-hint">Farbe, Rahmenbreite und Füllung je Ebene – wird sofort auf der Karte übernommen.</p>`;
+        let html = `<p class="tab-hint">Farbe, Rahmenbreite, Füllung und Sichtbarkeit je Ebene – wird sofort auf der Karte übernommen.</p>`;
         for (let l = 1; l <= 3; l++) {
             let s = styles[l];
             html += `
@@ -148,6 +180,10 @@
                     <div class="slider-group">Füllung
                         <input type="range" id="fill-${l}" min="0" max="0.6" step="0.02" value="${s.fillOpacity}">
                     </div>
+                    <label class="visible-toggle">
+                        <input type="checkbox" class="visible-checkbox" data-level="${l}" ${isVisible(l) ? 'checked' : ''}>
+                        Sichtbar
+                    </label>
                     <button class="reset-btn" data-level="${l}">Zurücksetzen</button>
                 </div>`;
         }
@@ -155,8 +191,10 @@
     }
 
     $(document).on('input', '#panel-lvl-4 input[type=color]', function () {
-        let l = this.id.split('-')[1];
         $(this).closest('.style-card').find('.swatch').css('background', this.value);
+    });
+    $(document).on('change', '#panel-lvl-4 .visible-checkbox', function () {
+        setVisible($(this).data('level'), $(this).is(':checked'));
     });
     $(document).on('click', '#panel-lvl-4 .reset-btn', function () {
         let l = $(this).data('level');
@@ -195,34 +233,73 @@
             [[deRes[0], "Deutschland"], [atRes[0], "Österreich"]].forEach(([data, countryName]) => {
                 data.features.forEach(f => {
                     let p = f.properties || {};
-                    let name = p.NAME_4 || p.NAME_3 || p.NAME_2 || p.NAME_1 || p.name || "Ohne Name";
+                    let name = featureName(p);
                     let path = countryName + (level === 1 ? "/Bundesländer" : (level === 2 ? `/Regierungsbezirke/${p.NAME_1 || "Sonstige"}` : `/${p.NAME_1 || "Sonstige"}/${p.NAME_2 || "Ohne LK"}`));
                     let id = featureId(p, f.id || Math.random());
                     selectMarkup += `<option value="${id}" ${saved.includes(id) ? 'selected' : ''} data-section="${path}">${name}</option>`;
                 });
             });
             selectMarkup += `</select>`;
-            panel.html(`<p class="tab-hint">Auswahl wird beim Speichern direkt auf der Karte eingefärbt.</p>` + selectMarkup);
+            panel.html(`
+                <p class="tab-hint">Auswahl wird beim Speichern direkt auf der Karte eingefärbt.</p>
+                <div class="select-actions">
+                    <button class="select-all-btn" data-level="${level}">Alle auswählen</button>
+                    <button class="select-none-btn" data-level="${level}">Alle abwählen</button>
+                </div>
+            ` + selectMarkup);
             ensureTreeMultiselect(() => $(`#kreise-selection-lvl-${level}`).treeMultiselect({ searchable: true, startCollapsed: true }));
         }).fail(() => panel.html('<p class="tab-hint">Laden fehlgeschlagen. Bitte später erneut versuchen.</p>'));
     }
 
+    $(document).on('click', '.select-all-btn, .select-none-btn', function () {
+        let level = $(this).data('level');
+        let selectAll = $(this).hasClass('select-all-btn');
+        $.when(fetchGeoJson(level, 'de'), fetchGeoJson(level, 'at')).done(function (deRes, atRes) {
+            let ids = [];
+            [deRes[0], atRes[0]].forEach(data => data.features.forEach(f => ids.push(featureId(f.properties || {}, f.id || Math.random()))));
+            localStorage.setItem(STORAGE_PREFIX + level, JSON.stringify(selectAll ? ids : []));
+            loadTabLevel(level);
+            updateBadges();
+        });
+    });
+
     // ---------- Kartendarstellung ----------
     let drawnLayers = { 1: null, 2: null, 3: null };
+    let legendControl = null;
+
+    function updateLegend() {
+        if (typeof map === 'undefined') return;
+        if (legendControl) { map.removeControl(legendControl); legendControl = null; }
+        let active = [1, 2, 3].filter(l => isVisible(l) && (JSON.parse(localStorage.getItem(STORAGE_PREFIX + l)) || []).length > 0);
+        if (!active.length) return;
+        legendControl = L.control({ position: 'bottomright' });
+        legendControl.onAdd = function () {
+            let div = L.DomUtil.create('div', 'lss-legend');
+            div.innerHTML = active.map(l => `<div class="lss-legend-row"><span class="lss-legend-swatch" style="background:${styles[l].color}"></span>${LEVEL_NAMES[l]}</div>`).join('');
+            return div;
+        };
+        legendControl.addTo(map);
+    }
+
     function drawLevel(level) {
         if (typeof map === 'undefined') return;
         if (drawnLayers[level]) { map.removeLayer(drawnLayers[level]); drawnLayers[level] = null; }
-        let savedIds = JSON.parse(localStorage.getItem(STORAGE_PREFIX + level)) || [];
-        if (!savedIds.length) return;
+        let savedIds = new Set(JSON.parse(localStorage.getItem(STORAGE_PREFIX + level)) || []);
+        if (!savedIds.size) { updateLegend(); return; }
         let s = styles[level];
-        let group = L.layerGroup().addTo(map);
+        let group = L.layerGroup();
         drawnLayers[level] = group;
+        if (isVisible(level)) group.addTo(map);
         ['de', 'at'].forEach(country => {
             fetchGeoJson(level, country).done(data => {
                 L.geoJSON(data, {
-                    filter: f => savedIds.includes(featureId(f.properties, f.id)),
-                    style: { color: s.color, fillColor: s.color, weight: s.weight, opacity: s.opacity, fillOpacity: s.fillOpacity }
+                    filter: f => savedIds.has(featureId(f.properties, f.id)),
+                    style: { color: s.color, fillColor: s.color, weight: s.weight, opacity: s.opacity, fillOpacity: s.fillOpacity },
+                    onEachFeature: (feature, layer) => {
+                        layer.bindPopup(featureName(feature.properties || {}));
+                    }
                 }).addTo(group);
+                updateLegend();
             });
         });
     }
@@ -236,6 +313,12 @@
         loadTabLevel(1);
     });
     $(document).on('click', '.kreise-close', () => $('#kreise-modal').hide());
+    $(document).on('keydown', (e) => { if (e.key === 'Escape') $('#kreise-modal').hide(); });
+    $(document).on('mousedown', (e) => {
+        if ($('#kreise-modal').is(':visible') && !$(e.target).closest('#kreise-modal, #kreise-openBtn').length) {
+            $('#kreise-modal').hide();
+        }
+    });
     $(document).on('click', '.lss-tab-nav li', function () {
         $('.lss-tab-nav li').removeClass('active'); $(this).addClass('active');
         $('.tab-content-panel').removeClass('active');
@@ -263,12 +346,19 @@
         $('#kreise-modal').hide();
     });
 
-    // ---------- Init ----------
-    let checkInterval = setInterval(() => {
+    // ---------- Init (MutationObserver statt endlosem Polling) ----------
+    function initButton() {
+        if ($('#kreise-openBtn').length) return true;
         if ($('.leaflet-control-zoom').length) {
             $('.leaflet-control-zoom').append('<a id="kreise-openBtn" href="#" title="Kreiskarte konfigurieren"></a>');
             drawAll();
-            clearInterval(checkInterval);
+            return true;
         }
-    }, 500);
+        return false;
+    }
+    if (!initButton()) {
+        const observer = new MutationObserver(() => { if (initButton()) observer.disconnect(); });
+        observer.observe(document.body, { childList: true, subtree: true });
+        setTimeout(() => observer.disconnect(), 30000); // Sicherheitsnetz, falls die Karte nie erscheint
+    }
 })();
