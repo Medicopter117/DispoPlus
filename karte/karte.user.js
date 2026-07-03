@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LSS Karte
 // @namespace    http://tampermonkey.net/
-// @version      4.1.0
+// @version      4.2.0
 // @description  Karte mit Bundesländer, Regierungsbezirke und Gemeinden für DE und AT -- Mit Einstellung.
 // @author       Jalibu, LennyPegauOfficial & AI
 // @match        https://www.leitstellenspiel.de/
@@ -13,100 +13,230 @@
 
 (function () {
     'use strict';
-    const STORAGE_PREFIX = 'LSS_KREIS_LVL_';
-    const COLOR_KEYS = { 1: 'LSS_COLOR_1', 2: 'LSS_COLOR_2', 3: 'LSS_COLOR_3' };
+
+    const STORAGE_PREFIX  = 'LSS_KREIS_LVL_';
+    const STYLE_KEY        = 'LSS_KREIS_STYLES';           // one consolidated object instead of 3 loose keys
+    const LEGACY_COLOR_KEYS = { 1: 'LSS_COLOR_1', 2: 'LSS_COLOR_2', 3: 'LSS_COLOR_3' };
     const BASE_URL = "https://raw.githubusercontent.com/Medicopter117/LSS-Karte/refs/heads/master/";
     const SOURCES = {
-        1: { de: "karte/deutschland/bundeslander.json", at: "karte/osterreich/bundeslander.json" },
+        1: { de: "karte/deutschland/bundeslander.json",     at: "karte/osterreich/bundeslander.json" },
         2: { de: "karte/deutschland/regierungbezirke.json", at: "karte/osterreich/regierungbezirke.json" },
-        3: { de: "karte/deutschland/stadte.json", at: "karte/osterreich/stadte.json" }
+        3: { de: "karte/deutschland/stadte.json",           at: "karte/osterreich/stadte.json" }
+    };
+    const LEVEL_NAMES = { 1: 'Länder', 2: 'Bezirke', 3: 'Städte' };
+    const DEFAULT_STYLES = {
+        1: { color: '#4361ee', weight: 3, opacity: 0.85, fillOpacity: 0.12 },
+        2: { color: '#f72585', weight: 3, opacity: 0.85, fillOpacity: 0.12 },
+        3: { color: '#4cc9f0', weight: 2, opacity: 0.85, fillOpacity: 0.18 }
     };
 
+    // ---------- style loading (with migration from the old 3-key format) ----------
+    function loadStyles() {
+        let stored = null;
+        try { stored = JSON.parse(localStorage.getItem(STYLE_KEY)); } catch (e) { stored = null; }
+        if (!stored) {
+            stored = JSON.parse(JSON.stringify(DEFAULT_STYLES));
+            let hadLegacy = false;
+            for (let l = 1; l <= 3; l++) {
+                let legacy = localStorage.getItem(LEGACY_COLOR_KEYS[l]);
+                if (legacy) { stored[l].color = legacy; hadLegacy = true; }
+            }
+            if (hadLegacy) localStorage.setItem(STYLE_KEY, JSON.stringify(stored));
+        }
+        // guard against partially-saved / outdated shape
+        for (let l = 1; l <= 3; l++) stored[l] = Object.assign({}, DEFAULT_STYLES[l], stored[l]);
+        return stored;
+    }
+    let styles = loadStyles();
+
+    // ---------- geoJSON request cache (fetched once, reused by the picker AND the map) ----------
+    const geoCache = {};
+    function fetchGeoJson(level, country) {
+        const key = level + '_' + country;
+        if (!geoCache[key]) geoCache[key] = $.getJSON(BASE_URL + SOURCES[level][country]);
+        return geoCache[key];
+    }
+    function featureId(p, fallback) {
+        return String(p.GID_4 || p.GID_3 || p.GID_2 || p.GID_1 || fallback);
+    }
+
+    // ---------- styling ----------
     $('head').append($('<link rel="stylesheet" type="text/css" />').attr('href', 'https://cdn.rawgit.com/patosai/tree-multiselect/v2.4.1/dist/jquery.tree-multiselect.min.css'));
     $('head').append(`
         <style>
-            .lss-tab-nav { display: flex; background: #eee; list-style: none; padding: 0; margin: 0; border-bottom: 2px solid #ccc; }
-            .lss-tab-nav li { padding: 12px 20px; color: #333; cursor: pointer; font-weight: bold; }
-            .lss-tab-nav li.active { background: #fff; border-top: 3px solid #f0ad4e; }
-            .tab-content-panel { display: none; padding: 20px; color: #333; }
-            .tab-content-panel.active { display: block; }
-            #kreise-modal { width: 70%; height: 80vh; position: absolute; top: 10%; left: 15%; background: #fff; z-index: 99999; border: 1px solid #777; display: flex; flex-direction: column; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
-            .color-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; padding: 10px; background: #f9f9f9; border-radius: 5px; }
+            #kreise-openBtn { display:block; width:26px; height:26px; background:#fff url(https://cdn-icons-png.flaticon.com/512/2838/2838912.png) center/16px no-repeat; border-bottom:1px solid #ccc; cursor:pointer; transition:background-color .15s ease; }
+            #kreise-openBtn:hover { background-color:#f0f0f0; }
+
+            #kreise-modal { width:70%; max-width:900px; height:80vh; position:fixed; top:10%; left:15%; background:#fff; z-index:99999;
+                border-radius:10px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 12px 40px rgba(0,0,0,.35);
+                font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+
+            #kreise-modal .kreise-header { background:linear-gradient(135deg,#3a0ca3,#4361ee); color:#fff; padding:14px 18px;
+                display:flex; align-items:center; justify-content:space-between; font-weight:600; font-size:15px; }
+            #kreise-modal .kreise-close { cursor:pointer; opacity:.85; font-size:20px; line-height:1; border:none; background:none; color:#fff; }
+            #kreise-modal .kreise-close:hover { opacity:1; }
+
+            .lss-tab-nav { display:flex; background:#f4f5f7; list-style:none; padding:0 10px; margin:0; border-bottom:1px solid #e2e2e2; }
+            .lss-tab-nav li { padding:11px 16px; color:#555; cursor:pointer; font-weight:600; font-size:13px; position:relative;
+                border-bottom:3px solid transparent; transition:color .15s ease, border-color .15s ease; display:flex; align-items:center; gap:6px; }
+            .lss-tab-nav li:hover { color:#222; }
+            .lss-tab-nav li.active { color:#3a0ca3; border-bottom-color:#3a0ca3; }
+            .lss-tab-nav li .badge { background:#3a0ca3; color:#fff; font-size:10px; font-weight:700; border-radius:9px;
+                padding:1px 6px; min-width:14px; text-align:center; display:none; }
+            .lss-tab-nav li.active .badge { background:#4361ee; }
+
+            #modal-body { flex:1; overflow-y:auto; background:#fff; }
+            .tab-content-panel { display:none; padding:18px; color:#333; }
+            .tab-content-panel.active { display:block; }
+            .tab-hint { margin:0 0 12px; font-size:12px; color:#888; }
+
+            .style-card { display:flex; align-items:center; gap:16px; margin-bottom:14px; padding:14px 16px;
+                background:#f9f9fb; border:1px solid #ececf1; border-radius:8px; }
+            .style-card .swatch { width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px #ddd; flex-shrink:0; }
+            .style-card .style-label { font-weight:600; font-size:13px; min-width:120px; color:#222; }
+            .style-card input[type=color] { width:36px; height:28px; border:none; border-radius:4px; padding:0; cursor:pointer; background:none; }
+            .style-card .slider-group { display:flex; align-items:center; gap:6px; font-size:11px; color:#777; }
+            .style-card .slider-group input[type=range] { width:80px; }
+            .style-card .reset-btn { margin-left:auto; font-size:11px; color:#3a0ca3; background:none; border:none; cursor:pointer; text-decoration:underline; }
+            .style-card .reset-btn:hover { color:#4361ee; }
+
+            #kreise-modal .kreise-footer { padding:12px 18px; border-top:1px solid #eee; text-align:right; background:#fafafa; }
+            #kreise-btn-save { padding:9px 22px; border:none; border-radius:6px; background:#3a0ca3; color:#fff; font-weight:600;
+                font-size:13px; cursor:pointer; transition:background-color .15s ease; }
+            #kreise-btn-save:hover { background:#4361ee; }
+            #kreise-btn-save:disabled { opacity:.6; cursor:default; }
         </style>
     `);
 
     $('body').append(`
-        <div id="kreise-modal" style="display: none;">
-            <div style="background:#f4f4f4; color:#333; padding: 15px; border-bottom:1px solid #ccc; font-weight:bold;">Konfiguration <button class="kreise-close" style="float:right; cursor:pointer;">×</button></div>
+        <div id="kreise-modal" style="display:none;">
+            <div class="kreise-header">
+                <span>Kreiskarte konfigurieren</span>
+                <button class="kreise-close" title="Schließen">×</button>
+            </div>
             <ul class="lss-tab-nav">
-                <li class="active" data-tab="1">Länder</li>
-                <li data-tab="2">Bezirke</li>
-                <li data-tab="3">Städte</li>
+                <li class="active" data-tab="1">Länder <span class="badge"></span></li>
+                <li data-tab="2">Bezirke <span class="badge"></span></li>
+                <li data-tab="3">Städte <span class="badge"></span></li>
                 <li data-tab="4">Farben</li>
             </ul>
-            <div id="modal-body" style="flex:1; overflow-y:auto;">
+            <div id="modal-body">
                 <div id="panel-lvl-1" class="tab-content-panel active"></div>
                 <div id="panel-lvl-2" class="tab-content-panel"></div>
                 <div id="panel-lvl-3" class="tab-content-panel"></div>
-                <div id="panel-lvl-4" class="tab-content-panel">
-                    <div class="color-row"><label>Bundesländer Farbe:</label> <input type="color" id="color-1" value="${localStorage.getItem(COLOR_KEYS[1]) || '#0000FF'}"></div>
-                    <div class="color-row"><label>Bezirke Farbe:</label> <input type="color" id="color-2" value="${localStorage.getItem(COLOR_KEYS[2]) || '#FF0000'}"></div>
-                    <div class="color-row"><label>Städte Farbe:</label> <input type="color" id="color-3" value="${localStorage.getItem(COLOR_KEYS[3]) || '#FFFF00'}"></div>
-                </div>
+                <div id="panel-lvl-4" class="tab-content-panel"></div>
             </div>
-            <div style="padding:15px; border-top:1px solid #ccc; text-align:right; background:#f9f9f9;">
-                <button id="kreise-btn-save" class="btn btn-primary" style="padding:10px 20px;">Speichern & Neuladen</button>
+            <div class="kreise-footer">
+                <button id="kreise-btn-save">Speichern & Anwenden</button>
             </div>
         </div>
     `);
 
-    function loadTabLevel(level) {
-        if (level == 4) return;
-        let panel = $(`#panel-lvl-${level}`);
-        panel.html('<p style="padding:20px; font-weight:bold; color:#333;">Bitte warten. lädt...</p>');
-        let saved = JSON.parse(localStorage.getItem(STORAGE_PREFIX + level)) || [];
-        let selectMarkup = `<select id="kreise-selection-lvl-${level}" multiple="multiple">`;
+    // ---------- Farben-Tab ----------
+    function renderColorPanel() {
+        let html = `<p class="tab-hint">Farbe, Rahmenbreite und Füllung je Ebene – wird sofort auf der Karte übernommen.</p>`;
+        for (let l = 1; l <= 3; l++) {
+            let s = styles[l];
+            html += `
+                <div class="style-card" data-level="${l}">
+                    <span class="swatch" style="background:${s.color}"></span>
+                    <span class="style-label">${LEVEL_NAMES[l]}</span>
+                    <input type="color" id="color-${l}" value="${s.color}">
+                    <div class="slider-group">Breite
+                        <input type="range" id="weight-${l}" min="1" max="6" step="1" value="${s.weight}">
+                    </div>
+                    <div class="slider-group">Füllung
+                        <input type="range" id="fill-${l}" min="0" max="0.6" step="0.02" value="${s.fillOpacity}">
+                    </div>
+                    <button class="reset-btn" data-level="${l}">Zurücksetzen</button>
+                </div>`;
+        }
+        $('#panel-lvl-4').html(html);
+    }
 
-        function fetchAndAppend(url, countryName) {
-            return $.getJSON(BASE_URL + url).then(function (data) {
+    $(document).on('input', '#panel-lvl-4 input[type=color]', function () {
+        let l = this.id.split('-')[1];
+        $(this).closest('.style-card').find('.swatch').css('background', this.value);
+    });
+    $(document).on('click', '#panel-lvl-4 .reset-btn', function () {
+        let l = $(this).data('level');
+        let d = DEFAULT_STYLES[l];
+        $(`#color-${l}`).val(d.color);
+        $(`#weight-${l}`).val(d.weight);
+        $(`#fill-${l}`).val(d.fillOpacity);
+        $(this).closest('.style-card').find('.swatch').css('background', d.color);
+    });
+
+    // ---------- Auswahl-Tabs ----------
+    function updateBadges() {
+        for (let l = 1; l <= 3; l++) {
+            let saved = JSON.parse(localStorage.getItem(STORAGE_PREFIX + l)) || [];
+            $(`.lss-tab-nav li[data-tab="${l}"] .badge`).text(saved.length).toggle(saved.length > 0);
+        }
+    }
+
+    let treeMultiselectLoaded = false;
+    function ensureTreeMultiselect(cb) {
+        if (treeMultiselectLoaded || $.fn.treeMultiselect) { treeMultiselectLoaded = true; cb(); return; }
+        $.getScript("https://cdn.rawgit.com/patosai/tree-multiselect/v2.4.1/dist/jquery.tree-multiselect.min.js", function () {
+            treeMultiselectLoaded = true;
+            cb();
+        });
+    }
+
+    function loadTabLevel(level) {
+        if (level == 4) { renderColorPanel(); return; }
+        let panel = $(`#panel-lvl-${level}`);
+        panel.html('<p class="tab-hint">Wird geladen…</p>');
+        let saved = JSON.parse(localStorage.getItem(STORAGE_PREFIX + level)) || [];
+
+        $.when(fetchGeoJson(level, 'de'), fetchGeoJson(level, 'at')).done(function (deRes, atRes) {
+            let selectMarkup = `<select id="kreise-selection-lvl-${level}" multiple="multiple">`;
+            [[deRes[0], "Deutschland"], [atRes[0], "Österreich"]].forEach(([data, countryName]) => {
                 data.features.forEach(f => {
                     let p = f.properties || {};
                     let name = p.NAME_4 || p.NAME_3 || p.NAME_2 || p.NAME_1 || p.name || "Ohne Name";
                     let path = countryName + (level === 1 ? "/Bundesländer" : (level === 2 ? `/Regierungsbezirke/${p.NAME_1 || "Sonstige"}` : `/${p.NAME_1 || "Sonstige"}/${p.NAME_2 || "Ohne LK"}`));
-                    let id = p.GID_4 || p.GID_3 || p.GID_2 || p.GID_1 || f.id || Math.random();
-                    selectMarkup += `<option value="${id}" ${saved.includes(String(id)) ? 'selected' : ''} data-section="${path}">${name}</option>`;
+                    let id = featureId(p, f.id || Math.random());
+                    selectMarkup += `<option value="${id}" ${saved.includes(id) ? 'selected' : ''} data-section="${path}">${name}</option>`;
                 });
             });
-        }
-        $.when(fetchAndAppend(SOURCES[level].de, "Deutschland"), fetchAndAppend(SOURCES[level].at, "Österreich")).done(function () {
             selectMarkup += `</select>`;
-            panel.html(selectMarkup);
-            $.getScript("https://cdn.rawgit.com/patosai/tree-multiselect/v2.4.1/dist/jquery.tree-multiselect.min.js", function () {
-                $(`#kreise-selection-lvl-${level}`).treeMultiselect({ searchable: true, startCollapsed: true });
+            panel.html(`<p class="tab-hint">Auswahl wird beim Speichern direkt auf der Karte eingefärbt.</p>` + selectMarkup);
+            ensureTreeMultiselect(() => $(`#kreise-selection-lvl-${level}`).treeMultiselect({ searchable: true, startCollapsed: true }));
+        }).fail(() => panel.html('<p class="tab-hint">Laden fehlgeschlagen. Bitte später erneut versuchen.</p>'));
+    }
+
+    // ---------- Kartendarstellung ----------
+    let drawnLayers = { 1: null, 2: null, 3: null };
+    function drawLevel(level) {
+        if (typeof map === 'undefined') return;
+        if (drawnLayers[level]) { map.removeLayer(drawnLayers[level]); drawnLayers[level] = null; }
+        let savedIds = JSON.parse(localStorage.getItem(STORAGE_PREFIX + level)) || [];
+        if (!savedIds.length) return;
+        let s = styles[level];
+        let group = L.layerGroup().addTo(map);
+        drawnLayers[level] = group;
+        ['de', 'at'].forEach(country => {
+            fetchGeoJson(level, country).done(data => {
+                L.geoJSON(data, {
+                    filter: f => savedIds.includes(featureId(f.properties, f.id)),
+                    style: { color: s.color, fillColor: s.color, weight: s.weight, opacity: s.opacity, fillOpacity: s.fillOpacity }
+                }).addTo(group);
             });
         });
     }
+    function drawAll() { for (let l = 1; l <= 3; l++) drawLevel(l); }
 
-    function draw() {
-        if (typeof map === 'undefined') return;
-        for (let l = 1; l <= 3; l++) {
-            let savedIds = JSON.parse(localStorage.getItem(STORAGE_PREFIX + l)) || [];
-            let color = localStorage.getItem(COLOR_KEYS[l]) || '#ff7800';
-            if (savedIds.length === 0) continue;
-            [SOURCES[l].de, SOURCES[l].at].forEach(url => {
-                $.getJSON(BASE_URL + url, (data) => {
-                    L.geoJSON(data, {
-                        filter: f => savedIds.includes(String(f.properties.GID_4 || f.properties.GID_3 || f.properties.GID_2 || f.properties.GID_1 || f.id)),
-                        style: { color: color, weight: 3, opacity: 0.6, fillOpacity: 0.1 }
-                    }).addTo(map);
-                });
-            });
-        }
-    }
-
-    $(document).on('click', '#kreise-openBtn', (e) => { e.preventDefault(); $('#kreise-modal').show(); loadTabLevel(1); });
-    $('.kreise-close').click(() => $('#kreise-modal').hide());
-    $('.lss-tab-nav li').click(function () {
+    // ---------- Events ----------
+    $(document).on('click', '#kreise-openBtn', (e) => {
+        e.preventDefault();
+        $('#kreise-modal').show();
+        updateBadges();
+        loadTabLevel(1);
+    });
+    $(document).on('click', '.kreise-close', () => $('#kreise-modal').hide());
+    $(document).on('click', '.lss-tab-nav li', function () {
         $('.lss-tab-nav li').removeClass('active'); $(this).addClass('active');
         $('.tab-content-panel').removeClass('active');
         let tab = $(this).data('tab');
@@ -114,19 +244,30 @@
         loadTabLevel(tab);
     });
 
-    $('#kreise-btn-save').click(function () {
-        $(this).text('Bitte warten. lädt...');
+    $(document).on('click', '#kreise-btn-save', function () {
+        let $btn = $(this).prop('disabled', true).text('Speichern…');
         for (let l = 1; l <= 3; l++) {
-            localStorage.setItem(COLOR_KEYS[l], $('#color-' + l).val());
-            localStorage.setItem(STORAGE_PREFIX + l, JSON.stringify($(`#kreise-selection-lvl-${l}`).val() || []));
+            let $select = $(`#kreise-selection-lvl-${l}`);
+            if ($select.length) localStorage.setItem(STORAGE_PREFIX + l, JSON.stringify($select.val() || []));
+            let $color = $(`#color-${l}`);
+            if ($color.length) {
+                styles[l].color = $color.val();
+                styles[l].weight = parseInt($(`#weight-${l}`).val(), 10);
+                styles[l].fillOpacity = parseFloat($(`#fill-${l}`).val());
+            }
         }
-        location.reload();
+        localStorage.setItem(STYLE_KEY, JSON.stringify(styles));
+        drawAll();
+        updateBadges();
+        $btn.prop('disabled', false).text('Speichern & Anwenden');
+        $('#kreise-modal').hide();
     });
 
+    // ---------- Init ----------
     let checkInterval = setInterval(() => {
         if ($('.leaflet-control-zoom').length) {
-            $('.leaflet-control-zoom').append('<a id="kreise-openBtn" href="#" style="display:block; width: 26px; height: 26px; background: white url(https://cdn-icons-png.flaticon.com/512/2838/2838912.png) center/20px no-repeat; border-bottom:1px solid #ccc; cursor:pointer;"></a>');
-            draw();
+            $('.leaflet-control-zoom').append('<a id="kreise-openBtn" href="#" title="Kreiskarte konfigurieren"></a>');
+            drawAll();
             clearInterval(checkInterval);
         }
     }, 500);
