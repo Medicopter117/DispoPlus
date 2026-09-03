@@ -8,6 +8,7 @@
 // @match        https://www.leitstellenspiel.de/profile/*
 // @match        https://polizei.leitstellenspiel.de/
 // @match        https://polizei.leitstellenspiel.de/profile/*
+// @match        https://wp.oppro-network.de/zugpsiel/
 // @grant        none
 // ==/UserScript==
 
